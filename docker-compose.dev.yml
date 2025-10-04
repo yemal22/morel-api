@@ -1,0 +1,13 @@
+version: '3.8'
+
+# Override for local development
+services:
+  web:
+    command: python manage.py runserver 0.0.0.0:8000
+    environment:
+      - DEBUG=True
+      - DEPLOYMENT_ENV=development
+    volumes:
+      - .:/app
+    stdin_open: true
+    tty: true

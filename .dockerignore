@@ -1,0 +1,83 @@
+# Git
+.git
+.gitignore
+.github
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+.pytest_cache
+.coverage
+htmlcov
+.tox
+.hypothesis
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation
+*.md
+docs/
+!README.md
+
+# Docker
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# Database
+*.sqlite3
+db.sqlite3
+*.db
+
+# Media files (will be volume mounted)
+media/
+
+# Static files (will be collected)
+staticfiles/
+static/
+
+# Environment
+.env
+.env.*
+
+# Tests
+tests/
+test_*.py
+*_test.py
+
+# CI/CD
+.github/
+Makefile
+
+# Logs
+*.log
+logs/
+
+# Backups
+*.sql
+*.dump
+backup_*
+
+# Coverage
+.coverage
+coverage.xml

@@ -1,0 +1,110 @@
+---
+# Ansible Playbook for Morel API Deployment
+# Usage: ansible-playbook -i inventory.ini deploy.yml
+
+- name: Deploy Morel API to VPS
+  hosts: production
+  become: yes
+  vars:
+    app_name: morel-api
+    app_dir: /app/{{ app_name }}
+    repo_url: https://github.com/yemal22/morel-api.git
+    docker_image: yemal22/morel-api
+
+  tasks:
+    - name: Install required packages
+      apt:
+        name:
+          - git
+          - docker.io
+          - docker-compose
+          - python3-pip
+        state: present
+        update_cache: yes
+
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Create app directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Clone or update repository
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: main
+        force: yes
+      register: git_result
+
+    - name: Copy .env file
+      template:
+        src: templates/.env.j2
+        dest: "{{ app_dir }}/.env"
+        mode: '0600'
+
+    - name: Login to Docker Hub
+      docker_login:
+        username: "{{ docker_username }}"
+        password: "{{ docker_password }}"
+
+    - name: Pull latest Docker image
+      docker_image:
+        name: "{{ docker_image }}"
+        tag: latest
+        source: pull
+        force_source: yes
+
+    - name: Stop existing containers
+      docker_compose:
+        project_src: "{{ app_dir }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Start containers
+      docker_compose:
+        project_src: "{{ app_dir }}"
+        state: present
+        pull: yes
+      register: compose_result
+
+    - name: Wait for services to be ready
+      wait_for:
+        host: localhost
+        port: 8000
+        delay: 10
+        timeout: 60
+
+    - name: Run database migrations
+      command: docker-compose exec -T web python manage.py migrate --noinput
+      args:
+        chdir: "{{ app_dir }}"
+
+    - name: Collect static files
+      command: docker-compose exec -T web python manage.py collectstatic --noinput
+      args:
+        chdir: "{{ app_dir }}"
+
+    - name: Check application health
+      uri:
+        url: http://localhost:8000/health/
+        status_code: 200
+      register: health_check
+      retries: 3
+      delay: 5
+
+    - name: Clean up old Docker images
+      command: docker system prune -af --volumes
+      when: git_result.changed
+
+    - name: Display deployment info
+      debug:
+        msg:
+          - "Deployment completed successfully!"
+          - "Application is running at: http://{{ ansible_host }}"
+          - "Health check: {{ health_check.json }}"
