@@ -136,7 +136,7 @@ jobs:
           cache-to: type=registry,ref=${{ secrets.DOCKER_USERNAME }}/morel-api:buildcache,mode=max
 
   deploy:
-    name: Deploy to VPS
+    name: Deploy to VPS with Ansible
     runs-on: ubuntu-latest
     needs: [build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -145,24 +145,87 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy to VPS via SSH
-        uses: appleboy/ssh-action@v1.0.0
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USERNAME }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT }}
-          script: |
-            cd /app/morel-api
-            docker login -u ${{ secrets.DOCKER_USERNAME }} -p ${{ secrets.DOCKER_PASSWORD }}
-            docker pull ${{ secrets.DOCKER_USERNAME }}/morel-api:latest
-            docker-compose down
-            docker-compose up -d
-            docker-compose exec -T web python manage.py migrate --noinput
-            docker-compose exec -T web python manage.py collectstatic --noinput
-            docker system prune -af
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible
+
+      - name: Create Ansible inventory
+        run: |
+          mkdir -p deployment
+          cat > deployment/inventory.ini << EOF
+          [production]
+          ${{ secrets.VPS_HOST }} ansible_user=${{ secrets.VPS_USERNAME }} ansible_port=${{ secrets.VPS_PORT }}
+          
+          [production:vars]
+          ansible_python_interpreter=/usr/bin/python3
+          ansible_ssh_private_key_file=/tmp/deploy_key
+          docker_username=${{ secrets.DOCKER_USERNAME }}
+          docker_password=${{ secrets.DOCKER_PASSWORD }}
+          app_url=${{ secrets.APP_URL }}
+          EOF
+
+      - name: Create SSH key file
+        run: |
+          echo "${{ secrets.VPS_SSH_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+
+      - name: Create Ansible variables file
+        run: |
+          cat > deployment/vars.yml << EOF
+          ---
+          secret_key: "${{ secrets.DJANGO_SECRET_KEY }}"
+          db_name: "${{ secrets.DB_NAME }}"
+          db_user: "${{ secrets.DB_USER }}"
+          db_password: "${{ secrets.DB_PASSWORD }}"
+          allowed_hosts: "${{ secrets.ALLOWED_HOSTS }}"
+          cors_origins: "${{ secrets.CORS_ORIGINS }}"
+          email_host: "${{ secrets.EMAIL_HOST }}"
+          email_port: "${{ secrets.EMAIL_PORT }}"
+          email_user: "${{ secrets.EMAIL_USER }}"
+          email_password: "${{ secrets.EMAIL_PASSWORD }}"
+          EOF
+
+      - name: Test Ansible connection
+        run: |
+          ansible -i deployment/inventory.ini production -m ping
+
+      - name: Run Ansible deployment playbook
+        run: |
+          ansible-playbook -i deployment/inventory.ini deployment/deploy.yml \
+            -e "docker_image=${{ secrets.DOCKER_USERNAME }}/morel-api:latest" \
+            -e "@deployment/vars.yml" \
+            --verbose
+
+      - name: Clean up sensitive files
+        if: always()
+        run: |
+          rm -f /tmp/deploy_key
+          rm -f deployment/inventory.ini
+          rm -f deployment/vars.yml
 
       - name: Health check
         run: |
-          sleep 10
-          curl -f ${{ secrets.APP_URL }}/health/ || exit 1
+          sleep 15
+          response=$(curl -s -o /dev/null -w "%{http_code}" ${{ secrets.APP_URL }}/health/)
+          if [ $response -eq 200 ]; then
+            echo "✅ Health check passed!"
+            curl -s ${{ secrets.APP_URL }}/health/ | jq .
+          else
+            echo "❌ Health check failed with status code: $response"
+            exit 1
+          fi
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ ${{ job.status }} == 'success' ]; then
+            echo "🚀 Deployment successful to ${{ secrets.APP_URL }}"
+          else
+            echo "❌ Deployment failed"
+          fi

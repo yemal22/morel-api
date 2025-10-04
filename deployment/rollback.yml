@@ -1,0 +1,67 @@
+---
+# Rollback Playbook - Restore previous version
+# Usage: ansible-playbook -i inventory.ini rollback.yml
+
+- name: Rollback Morel API Deployment
+  hosts: production
+  become: yes
+  vars:
+    app_name: morel-api
+    app_dir: /app/{{ app_name }}
+    backup_dir: /app/backups
+
+  tasks:
+    - name: List available backups
+      find:
+        paths: "{{ backup_dir }}"
+        patterns: "db_backup_*.sql"
+      register: backup_files
+
+    - name: Display available backups
+      debug:
+        msg: "{{ backup_files.files | map(attribute='path') | list }}"
+
+    - name: Get latest backup
+      set_fact:
+        latest_backup: "{{ backup_files.files | sort(attribute='mtime', reverse=true) | first }}"
+      when: backup_files.matched > 0
+
+    - name: Stop current containers
+      community.docker.docker_compose:
+        project_src: "{{ app_dir }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Restore database from backup
+      shell: |
+        docker-compose up -d db
+        sleep 10
+        cat {{ latest_backup.path }} | docker-compose exec -T db psql -U postgres morel_api
+      args:
+        chdir: "{{ app_dir }}"
+      when: backup_files.matched > 0
+
+    - name: Restart all containers
+      community.docker.docker_compose:
+        project_src: "{{ app_dir }}"
+        state: present
+
+    - name: Wait for services
+      wait_for:
+        host: localhost
+        port: 8000
+        delay: 10
+        timeout: 60
+
+    - name: Verify rollback
+      uri:
+        url: http://localhost:8000/health/
+        status_code: 200
+      register: health_check
+
+    - name: Display rollback status
+      debug:
+        msg:
+          - "Rollback completed!"
+          - "Database restored from: {{ latest_backup.path }}"
+          - "Health status: {{ health_check.json.status }}"

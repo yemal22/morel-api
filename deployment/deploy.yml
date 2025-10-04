@@ -1,6 +1,6 @@
 ---
 # Ansible Playbook for Morel API Deployment
-# Usage: ansible-playbook -i inventory.ini deploy.yml
+# Usage: ansible-playbook -i inventory.ini deploy.yml -e "docker_image=username/morel-api:latest"
 
 - name: Deploy Morel API to VPS
   hosts: production
@@ -8,31 +8,88 @@
   vars:
     app_name: morel-api
     app_dir: /app/{{ app_name }}
-    repo_url: https://github.com/yemal22/morel-api.git
-    docker_image: yemal22/morel-api
+    repo_url: https://github.com/yourusername/morel-api.git
+    backup_dir: /app/backups
+    max_backups: 5
+
+  pre_tasks:
+    - name: Display deployment information
+      debug:
+        msg:
+          - "Deploying {{ app_name }} to {{ inventory_hostname }}"
+          - "Docker image: {{ docker_image }}"
+          - "App directory: {{ app_dir }}"
 
   tasks:
-    - name: Install required packages
+    # === SYSTEM PREPARATION ===
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required system packages
       apt:
         name:
           - git
           - docker.io
           - docker-compose
           - python3-pip
+          - curl
+          - jq
+          - acl  # For Ansible become_user
         state: present
-        update_cache: yes
 
-    - name: Start Docker service
-      service:
+    - name: Install Docker SDK for Python
+      pip:
+        name:
+          - docker
+          - docker-compose
+        state: present
+
+    - name: Start and enable Docker service
+      systemd:
         name: docker
         state: started
         enabled: yes
 
+    - name: Add deploy user to docker group
+      user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: yes
+
+    # === BACKUP CURRENT DEPLOYMENT ===
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Backup current database (if exists)
+      shell: |
+        if [ -d "{{ app_dir }}" ]; then
+          docker-compose -f {{ app_dir }}/docker-compose.yml exec -T db \
+            pg_dump -U postgres morel_api > {{ backup_dir }}/db_backup_$(date +%Y%m%d_%H%M%S).sql
+        fi
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
+    - name: Remove old backups (keep last {{ max_backups }})
+      shell: |
+        cd {{ backup_dir }}
+        ls -t db_backup_*.sql | tail -n +{{ max_backups + 1 }} | xargs -r rm
+      args:
+        executable: /bin/bash
+      ignore_errors: yes
+
+    # === APPLICATION DEPLOYMENT ===
     - name: Create app directory
       file:
         path: "{{ app_dir }}"
         state: directory
         mode: '0755'
+        owner: "{{ ansible_user }}"
 
     - name: Clone or update repository
       git:
@@ -40,71 +97,146 @@
         dest: "{{ app_dir }}"
         version: main
         force: yes
+        update: yes
       register: git_result
+      become_user: "{{ ansible_user }}"
 
-    - name: Copy .env file
+    - name: Copy environment configuration
       template:
         src: templates/.env.j2
         dest: "{{ app_dir }}/.env"
         mode: '0600'
+        owner: "{{ ansible_user }}"
+      no_log: true  # Don't log sensitive data
 
+    # === DOCKER OPERATIONS ===
     - name: Login to Docker Hub
-      docker_login:
+      community.docker.docker_login:
         username: "{{ docker_username }}"
         password: "{{ docker_password }}"
+      no_log: true
 
     - name: Pull latest Docker image
-      docker_image:
+      community.docker.docker_image:
         name: "{{ docker_image }}"
-        tag: latest
         source: pull
         force_source: yes
+      register: pull_result
 
-    - name: Stop existing containers
-      docker_compose:
+    - name: Stop existing containers gracefully
+      community.docker.docker_compose:
         project_src: "{{ app_dir }}"
         state: absent
+        remove_orphans: yes
       ignore_errors: yes
 
-    - name: Start containers
-      docker_compose:
+    - name: Start new containers
+      community.docker.docker_compose:
         project_src: "{{ app_dir }}"
         state: present
         pull: yes
+        recreate: always
       register: compose_result
 
-    - name: Wait for services to be ready
+    - name: Wait for database to be ready
+      wait_for:
+        host: localhost
+        port: 5432
+        delay: 5
+        timeout: 60
+        state: started
+
+    - name: Wait for web service to be ready
       wait_for:
         host: localhost
         port: 8000
         delay: 10
-        timeout: 60
+        timeout: 120
+        state: started
 
+    # === DATABASE MIGRATIONS ===
     - name: Run database migrations
-      command: docker-compose exec -T web python manage.py migrate --noinput
+      shell: docker-compose exec -T web python manage.py migrate --noinput
       args:
         chdir: "{{ app_dir }}"
+      register: migrate_result
 
+    - name: Display migration output
+      debug:
+        var: migrate_result.stdout_lines
+
+    # === STATIC FILES ===
     - name: Collect static files
-      command: docker-compose exec -T web python manage.py collectstatic --noinput
+      shell: docker-compose exec -T web python manage.py collectstatic --noinput
       args:
         chdir: "{{ app_dir }}"
+      register: collectstatic_result
 
-    - name: Check application health
+    # === HEALTH CHECK ===
+    - name: Perform health check
       uri:
         url: http://localhost:8000/health/
         status_code: 200
+        return_content: yes
       register: health_check
-      retries: 3
+      retries: 5
       delay: 5
+      until: health_check.status == 200
 
+    - name: Display health check result
+      debug:
+        msg: "{{ health_check.json }}"
+
+    # === CLEANUP ===
     - name: Clean up old Docker images
-      command: docker system prune -af --volumes
+      shell: docker image prune -af --filter "until=24h"
       when: git_result.changed
 
-    - name: Display deployment info
+    - name: Clean up old Docker volumes (unused)
+      shell: docker volume prune -f
+      when: git_result.changed
+
+    # === MONITORING SETUP ===
+    - name: Ensure log directory exists
+      file:
+        path: "{{ app_dir }}/logs"
+        state: directory
+        mode: '0755'
+
+    - name: Setup log rotation (optional)
+      copy:
+        dest: /etc/logrotate.d/morel-api
+        content: |
+          {{ app_dir }}/logs/*.log {
+              daily
+              rotate 14
+              compress
+              delaycompress
+              notifempty
+              create 0644 {{ ansible_user }} {{ ansible_user }}
+              sharedscripts
+          }
+        mode: '0644'
+      ignore_errors: yes
+
+  post_tasks:
+    - name: Display deployment summary
       debug:
         msg:
-          - "Deployment completed successfully!"
-          - "Application is running at: http://{{ ansible_host }}"
-          - "Health check: {{ health_check.json }}"
+          - "================================================"
+          - "✅ Deployment completed successfully!"
+          - "================================================"
+          - "Application URL: http://{{ ansible_host }}"
+          - "Health Status: {{ health_check.json.status }}"
+          - "Database: {{ health_check.json.database }}"
+          - "Version: {{ health_check.json.details.version }}"
+          - "================================================"
+          - "Git Changed: {{ git_result.changed }}"
+          - "Docker Image Pulled: {{ pull_result.changed }}"
+          - "================================================"
+
+  handlers:
+    - name: restart docker
+      systemd:
+        name: docker
+        state: restarted

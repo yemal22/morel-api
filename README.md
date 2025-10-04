@@ -26,7 +26,7 @@ API REST complète pour un portfolio évolutif, construite avec Django Rest Fram
 ### 1. Cloner le repository
 
 ```bash
-git clone https://github.com/yourusername/morel-api.git
+git clone https://github.com/yemal22/morel-api.git
 cd morel-api
 ```
 

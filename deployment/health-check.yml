@@ -1,0 +1,69 @@
+---
+# Health Check Playbook - Monitor application status
+# Usage: ansible-playbook -i inventory.ini health-check.yml
+
+- name: Health Check Morel API
+  hosts: production
+  become: yes
+  vars:
+    app_name: morel-api
+    app_dir: /app/{{ app_name }}
+
+  tasks:
+    - name: Check if Docker is running
+      systemd:
+        name: docker
+      register: docker_status
+
+    - name: Get running containers
+      shell: docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+      register: containers
+
+    - name: Check web container health
+      uri:
+        url: http://localhost:8000/health/
+        return_content: yes
+      register: web_health
+      ignore_errors: yes
+
+    - name: Check database connectivity
+      shell: docker-compose exec -T db pg_isready -U postgres
+      args:
+        chdir: "{{ app_dir }}"
+      register: db_health
+      ignore_errors: yes
+
+    - name: Get disk usage
+      shell: df -h {{ app_dir }}
+      register: disk_usage
+
+    - name: Get memory usage
+      shell: free -h
+      register: memory_usage
+
+    - name: Display health status
+      debug:
+        msg:
+          - "=== SYSTEM HEALTH CHECK ==="
+          - "Docker Status: {{ docker_status.status.ActiveState }}"
+          - ""
+          - "=== RUNNING CONTAINERS ==="
+          - "{{ containers.stdout }}"
+          - ""
+          - "=== APPLICATION HEALTH ==="
+          - "Web Status: {{ web_health.status | default('ERROR') }}"
+          - "{% if web_health.json is defined %}API Health: {{ web_health.json | to_nice_json }}{% endif %}"
+          - ""
+          - "=== DATABASE HEALTH ==="
+          - "PostgreSQL: {{ db_health.stdout | default('ERROR') }}"
+          - ""
+          - "=== DISK USAGE ==="
+          - "{{ disk_usage.stdout }}"
+          - ""
+          - "=== MEMORY USAGE ==="
+          - "{{ memory_usage.stdout }}"
+
+    - name: Fail if health check failed
+      fail:
+        msg: "Health check failed! Web status: {{ web_health.status | default('Unknown') }}"
+      when: web_health.status != 200

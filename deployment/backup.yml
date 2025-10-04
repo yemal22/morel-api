@@ -1,0 +1,53 @@
+---
+# Backup Playbook - Manual database backup
+# Usage: ansible-playbook -i inventory.ini backup.yml
+
+- name: Backup Morel API Database
+  hosts: production
+  become: yes
+  vars:
+    app_name: morel-api
+    app_dir: /app/{{ app_name }}
+    backup_dir: /app/backups
+    backup_filename: "db_backup_manual_{{ ansible_date_time.iso8601_basic_short }}.sql"
+
+  tasks:
+    - name: Ensure backup directory exists
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create database backup
+      shell: |
+        docker-compose exec -T db pg_dump -U postgres morel_api > {{ backup_dir }}/{{ backup_filename }}
+      args:
+        chdir: "{{ app_dir }}"
+      register: backup_result
+
+    - name: Compress backup
+      archive:
+        path: "{{ backup_dir }}/{{ backup_filename }}"
+        dest: "{{ backup_dir }}/{{ backup_filename }}.gz"
+        format: gz
+        remove: yes
+
+    - name: Get backup file info
+      stat:
+        path: "{{ backup_dir }}/{{ backup_filename }}.gz"
+      register: backup_stat
+
+    - name: Display backup information
+      debug:
+        msg:
+          - "✅ Backup completed successfully!"
+          - "Backup file: {{ backup_dir }}/{{ backup_filename }}.gz"
+          - "Size: {{ (backup_stat.stat.size / 1024 / 1024) | round(2) }} MB"
+          - "Created: {{ ansible_date_time.iso8601 }}"
+
+    - name: Download backup to local machine (optional)
+      fetch:
+        src: "{{ backup_dir }}/{{ backup_filename }}.gz"
+        dest: "./backups/"
+        flat: yes
+      when: download_backup | default(false)
