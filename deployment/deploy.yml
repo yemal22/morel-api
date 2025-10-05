@@ -124,7 +124,7 @@
       register: pull_result
 
     - name: Stop existing containers gracefully
-      community.docker.docker_compose:
+      community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         state: absent
         remove_orphans: yes
