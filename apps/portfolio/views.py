@@ -4,7 +4,7 @@ Views for portfolio app.
 from rest_framework import viewsets, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated
+from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
 from django.db import connection
 from django.http import JsonResponse
@@ -233,7 +233,7 @@ class BlogPostViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(featured_posts, many=True)
         return Response(serializer.data)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], permission_classes=[AllowAny])
     def increment_views(self, request, slug=None):
         """Increment the views count for a blog post."""
         post = self.get_object()

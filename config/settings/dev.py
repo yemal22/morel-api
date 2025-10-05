@@ -32,5 +32,5 @@ EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 # INTERNAL_IPS = ['127.0.0.1']
 
 # More verbose logging in development
-LOGGING['root']['level'] = 'DEBUG'
-LOGGING['loggers']['django']['level'] = 'DEBUG'
+#LOGGING['root']['level'] = 'DEBUG'
+#LOGGING['loggers']['django']['level'] = 'DEBUG'

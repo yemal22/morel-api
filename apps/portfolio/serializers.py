@@ -105,7 +105,7 @@ class ProjectSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'tag_list', 'technology_list']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'tag_list', 'technology_list', 'user']
 
     def validate_slug(self, value):
         """Ensure slug is lowercase and valid."""
@@ -128,6 +128,7 @@ class ProjectListSerializer(serializers.ModelSerializer):
             'tag_list',
             'technology_list',
             'is_featured',
+            'is_published',
             'start_date',
             'created_at',
         ]
@@ -200,7 +201,7 @@ class EducationSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'user']
 
     def validate(self, data):
         """Validate that end_date is after start_date if provided."""
