@@ -2,16 +2,18 @@
 Management command to seed the database with sample data.
 """
 
-from django.core.management.base import BaseCommand
-from django.contrib.auth import get_user_model
 from datetime import date, datetime, timedelta
+
+from django.contrib.auth import get_user_model
+from django.core.management.base import BaseCommand
+
 from apps.portfolio.models import (
-    UserProfile,
-    Project,
-    Experience,
-    Education,
-    Skill,
     BlogPost,
+    Education,
+    Experience,
+    Project,
+    Skill,
+    UserProfile,
 )
 
 User = get_user_model()
