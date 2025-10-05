@@ -15,4 +15,11 @@ ignore =
     E501,
     W503
 per-file-ignores =
-    __init__.py:F401
+    __init__.py:F401,F403
+    */settings/__init__.py:F401,F403,F405
+    */settings/dev.py:F401,F403,F405
+    */settings/prod.py:F401,F403,F405
+    */admin.py:F401
+    */models.py:F401
+    */tests.py:F401
+    */views.py:F401
