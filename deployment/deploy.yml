@@ -131,7 +131,7 @@
       ignore_errors: yes
 
     - name: Start new containers
-      community.docker.docker_compose:
+      community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
         state: present
         pull: yes
