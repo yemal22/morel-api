@@ -10,7 +10,10 @@
     app_dir: /app/{{ app_name }}
     repo_url: https://github.com/yemal22/morel-api.git
     backup_dir: /app/backups
+    secret_key: "django-insecure-zr^%0*98o+^@1xji9gii4t922m*t@9k@oosmdf(hc)w9jc2qa7"
     max_backups: 5
+    app_name: "morel-api"
+    docker_image: "ghcr.io/yemal22/morel-api:latest"
 
   pre_tasks:
     - name: Display deployment information
@@ -40,10 +43,11 @@
         state: present
 
     - name: Install Docker SDK for Python
-      pip:
+      become: yes
+      apt:
         name:
-          - docker
-          - docker-compose
+          - python3-docker
+          - python3-dockerpty
         state: present
 
     - name: Start and enable Docker service
