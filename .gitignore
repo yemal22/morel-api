@@ -210,3 +210,4 @@ yarn-error.log
 *.pid.lock
 
 !*.example
+!.env.j2
