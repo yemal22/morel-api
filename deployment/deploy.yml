@@ -13,8 +13,7 @@
     backup_dir: /app/backups
     secret_key: "django-insecure-zr^%0*98o+^@1xji9gii4t922m*t@9k@oosmdf(hc)w9jc2qa7"
     max_backups: 5
-    docker_image: "ghcr.io/yemal22/morel-api:latest"
-    docker_registry: "ghcr.io"
+    docker_image: "yemalin/morel-api:latest"
     db_name: morel_api_db
     db_user: postgres
     db_password: postgres
@@ -47,17 +46,39 @@
       args:
         creates: /usr/local/bin/docker-compose
 
-    - name: Install required system packages
-      apt:
-        name:
-          - git
-          - docker.io
-          - docker-compose
-          - python3-pip
-          - curl
-          - jq
-          - acl  # For Ansible become_user
-        state: present
+    - name: Ensure Docker and Docker Compose are installed
+      block:
+        - name: Check if Docker is installed
+          command: docker --version
+          register: docker_check
+          ignore_errors: yes
+
+        - name: Install Docker Engine if not installed
+          apt:
+            name: docker.io
+            state: present
+            update_cache: yes
+          when: docker_check.rc != 0
+          become: yes
+
+        - name: Check if Docker Compose plugin is available
+          command: docker compose version
+          register: compose_check
+          ignore_errors: yes
+
+        - name: Install Docker Compose plugin if missing
+          apt:
+            name: docker-compose-plugin
+            state: present
+            update_cache: yes
+          when: compose_check.rc != 0
+          become: yes
+
+      rescue:
+        - name: Log Docker installation issue
+          debug:
+            msg: "Docker installation failed, check held packages or containerd conflicts."
+
 
     - name: Install Docker SDK for Python
       become: yes
@@ -152,6 +173,40 @@
         remove_orphans: yes
       ignore_errors: yes
 
+    - name: Force remove all project containers
+      shell: |
+        docker ps -aq --filter "name=morel-api" | xargs -r docker rm -f
+      ignore_errors: yes
+
+    - name: Remove project network
+      shell: |
+        docker network ls --filter "name=morel-api" -q | xargs -r docker network rm
+      ignore_errors: yes
+
+    - name: Check for processes using port 5433
+      shell: lsof -ti:5433 || true
+      register: port_check
+      changed_when: false
+
+    - name: Stop any standalone PostgreSQL service
+      systemd:
+        name: postgresql
+        state: stopped
+      when: port_check.stdout != ""
+      ignore_errors: yes
+
+    - name: Kill any process using port 5433
+      shell: lsof -ti:5433 | xargs -r kill -9
+      when: port_check.stdout != ""
+      ignore_errors: yes
+
+    - name: Wait for port 5433 to be released
+      wait_for:
+        port: 5433
+        state: stopped
+        timeout: 30
+      ignore_errors: yes
+
     - name: Start new containers
       community.docker.docker_compose_v2:
         project_src: "{{ app_dir }}"
@@ -163,7 +218,7 @@
     - name: Wait for database to be ready
       wait_for:
         host: localhost
-        port: 5432
+        port: 5433
         delay: 5
         timeout: 60
         state: started
